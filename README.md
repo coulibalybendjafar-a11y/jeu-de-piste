@@ -1,1 +1,876 @@
 # jeu-de-piste
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>NEON RACER X</title>
+
+<style>
+*{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+}
+
+body{
+    overflow:hidden;
+    background:#050713;
+    font-family:Arial,sans-serif;
+    color:white;
+}
+
+canvas{
+    display:block;
+}
+
+#hud{
+    position:fixed;
+    top:15px;
+    left:15px;
+    right:15px;
+    display:flex;
+    justify-content:space-between;
+    gap:10px;
+    font-weight:bold;
+    font-size:16px;
+    text-shadow:0 0 10px #00eaff;
+    pointer-events:none;
+    z-index:5;
+}
+
+#menu{
+    position:fixed;
+    inset:0;
+    z-index:10;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    background:
+    radial-gradient(circle,#10275b,#02030a 70%);
+    text-align:center;
+    padding:20px;
+}
+
+h1{
+    font-size:48px;
+    color:#00eaff;
+    text-shadow:
+        0 0 10px #00eaff,
+        0 0 30px #00eaff;
+    margin-bottom:15px;
+}
+
+#menu p{
+    color:#aaa;
+    margin-bottom:30px;
+}
+
+button{
+    padding:15px 40px;
+    border:2px solid #00eaff;
+    background:#071329;
+    color:#00eaff;
+    font-size:20px;
+    font-weight:bold;
+    border-radius:12px;
+    box-shadow:0 0 20px #00eaff;
+}
+
+#controls{
+    position:fixed;
+    bottom:25px;
+    left:0;
+    right:0;
+    display:flex;
+    justify-content:space-around;
+    z-index:6;
+    pointer-events:none;
+}
+
+.ctrl{
+    width:75px;
+    height:75px;
+    border:2px solid #00eaff;
+    border-radius:50%;
+    background:#061326cc;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:30px;
+    box-shadow:0 0 15px #00eaff;
+    pointer-events:auto;
+    user-select:none;
+    touch-action:none;
+}
+</style>
+</head>
+
+<body>
+
+<div id="hud">
+    <span id="score">SCORE : 0</span>
+    <span id="coins">💙 0</span>
+    <span id="speed">0 KM/H</span>
+    <span id="level">NIVEAU : 1</span>
+</div>
+
+<div id="menu">
+    <h1>NEON RACER X</h1>
+    <p>Ramasse les pièces bleues 💙 et évite les voitures !</p>
+    <button id="start">JOUER</button>
+</div>
+
+<div id="controls">
+    <div class="ctrl" id="left">◀</div>
+    <div class="ctrl" id="boost">⚡</div>
+    <div class="ctrl" id="right">▶</div>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+let W,H;
+
+function resize(){
+    W = canvas.width = innerWidth;
+    H = canvas.height = innerHeight;
+}
+
+addEventListener("resize",resize);
+resize();
+
+let running = false;
+let score = 0;
+let coinCount = 0;
+let level = 1;
+let speed = 7;
+let roadOffset = 0;
+
+let left = false;
+let right = false;
+let boosting = false;
+
+let enemies = [];
+let coins = [];
+let particles = [];
+
+let spawnTimer = 0;
+let coinTimer = 0;
+let last = 0;
+
+const player = {
+    x:0,
+    y:0,
+    w:42,
+    h:75,
+    vx:0,
+    color:"#00eaff"
+};
+
+function reset(){
+
+    score = 0;
+    coinCount = 0;
+    level = 1;
+    speed = 7;
+
+    roadOffset = 0;
+
+    enemies = [];
+    coins = [];
+    particles = [];
+
+    player.x = W/2;
+    player.y = H-130;
+    player.vx = 0;
+
+    running = true;
+
+    document.getElementById("menu").style.display = "none";
+
+    last = performance.now();
+
+    requestAnimationFrame(loop);
+}
+
+function road(){
+
+    const rw = Math.min(W*0.72,560);
+    const rx = (W-rw)/2;
+
+    ctx.fillStyle="#111827";
+    ctx.fillRect(rx,0,rw,H);
+
+    ctx.fillStyle="#202a3d";
+    ctx.fillRect(rx-10,0,10,H);
+    ctx.fillRect(rx+rw,0,10,H);
+
+    ctx.strokeStyle="#00eaff";
+    ctx.lineWidth=3;
+    ctx.shadowBlur=15;
+    ctx.shadowColor="#00eaff";
+
+    ctx.beginPath();
+    ctx.moveTo(rx,0);
+    ctx.lineTo(rx,H);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(rx+rw,0);
+    ctx.lineTo(rx+rw,H);
+    ctx.stroke();
+
+    ctx.shadowBlur=0;
+
+    const lane=rw/3;
+
+    ctx.strokeStyle="#718096";
+    ctx.lineWidth=4;
+
+    ctx.setLineDash([35,35]);
+    ctx.lineDashOffset=roadOffset;
+
+    for(let i=1;i<3;i++){
+
+        ctx.beginPath();
+        ctx.moveTo(rx+i*lane,0);
+        ctx.lineTo(rx+i*lane,H);
+        ctx.stroke();
+
+    }
+
+    ctx.setLineDash([]);
+
+    return {
+        rx,
+        rw,
+        lane
+    };
+}
+
+function drawCar(x,y,w,h,color){
+
+    ctx.save();
+
+    ctx.translate(x,y);
+
+    ctx.shadowColor=color;
+    ctx.shadowBlur=20;
+
+    ctx.fillStyle=color;
+
+    ctx.beginPath();
+    ctx.roundRect(
+        -w/2,
+        -h/2,
+        w,
+        h,
+        10
+    );
+
+    ctx.fill();
+
+    ctx.shadowBlur=0;
+
+    ctx.fillStyle="#07101d";
+
+    ctx.beginPath();
+
+    ctx.roundRect(
+        -w*.34,
+        -h*.22,
+        w*.68,
+        h*.27,
+        5
+    );
+
+    ctx.fill();
+
+    ctx.fillStyle="#ffffff";
+
+    ctx.fillRect(-w*.42,-h*.39,w*.18,7);
+    ctx.fillRect(w*.24,-h*.39,w*.18,7);
+
+    ctx.fillStyle="#111";
+
+    ctx.fillRect(-w/2-4,-h*.25,7,18);
+    ctx.fillRect(w/2-3,-h*.25,7,18);
+
+    ctx.fillRect(-w/2-4,h*.05,7,18);
+    ctx.fillRect(w/2-3,h*.05,7,18);
+
+    ctx.restore();
+}
+
+/* =========================
+       PIÈCE BLEUE
+========================= */
+
+function drawCoin(c){
+
+    ctx.save();
+
+    ctx.translate(c.x,c.y);
+
+    ctx.rotate(c.rot);
+
+    /* Aura bleue */
+
+    ctx.shadowColor="#00aaff";
+    ctx.shadowBlur=30;
+
+    /* Extérieur */
+
+    ctx.strokeStyle="#008cff";
+    ctx.lineWidth=6;
+
+    ctx.beginPath();
+    ctx.arc(0,0,c.r,0,Math.PI*2);
+    ctx.stroke();
+
+    /* Intérieur */
+
+    ctx.shadowBlur=15;
+
+    ctx.fillStyle="#00d9ff";
+
+    ctx.beginPath();
+    ctx.arc(0,0,c.r-5,0,Math.PI*2);
+    ctx.fill();
+
+    /* Symbole */
+
+    ctx.fillStyle="#ffffff";
+    ctx.font="bold 14px Arial";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+
+    ctx.fillText("★",0,1);
+
+    ctx.restore();
+}
+
+function spawnEnemy(){
+
+    const r = road();
+
+    const lane =
+        Math.floor(Math.random()*3);
+
+    enemies.push({
+
+        x:r.rx+r.lane*(lane+.5),
+
+        y:-100,
+
+        w:42,
+        h:75,
+
+        speed:
+            2+
+            Math.random()*4+
+            level*.3,
+
+        color:[
+            "#ff1744",
+            "#ffea00",
+            "#9c27ff",
+            "#ff6d00"
+        ][Math.floor(Math.random()*4)]
+    });
+}
+
+/* =========================
+       CRÉATION DES PIÈCES
+========================= */
+
+function spawnCoin(){
+
+    const r = road();
+
+    const lane =
+        Math.floor(Math.random()*3);
+
+    coins.push({
+
+        x:r.rx+r.lane*(lane+.5),
+
+        y:-40,
+
+        r:16,
+
+        rot:0,
+
+        pulse:0
+    });
+}
+
+function createParticles(x,y,color){
+
+    for(let i=0;i<15;i++){
+
+        particles.push({
+
+            x:x,
+
+            y:y,
+
+            vx:(Math.random()-.5)*7,
+
+            vy:(Math.random()-.5)*7,
+
+            life:1,
+
+            color:color
+        });
+    }
+}
+
+function collision(a,b){
+
+    return (
+
+        Math.abs(a.x-b.x)
+        <
+        (a.w+b.w)/2-8
+
+        &&
+
+        Math.abs(a.y-b.y)
+        <
+        (a.h+b.h)/2-8
+    );
+}
+
+function update(dt){
+
+    const r = road();
+
+    /* Contrôle */
+
+    if(left)
+        player.vx -= .8;
+
+    if(right)
+        player.vx += .8;
+
+    if(!left && !right)
+        player.vx *= .86;
+
+    /* Turbo */
+
+    if(boosting){
+
+        speed += .15;
+
+        if(speed>18)
+            speed=18;
+
+    }else{
+
+        speed -= .02;
+
+        if(speed<7)
+            speed=7;
+    }
+
+    player.x += player.vx;
+
+    player.x =
+        Math.max(
+            r.rx+30,
+            Math.min(
+                r.rx+r.rw-30,
+                player.x
+            )
+        );
+
+    roadOffset += speed*dt*70;
+
+    /* Voitures */
+
+    spawnTimer -= dt;
+
+    if(spawnTimer<=0){
+
+        spawnEnemy();
+
+        spawnTimer =
+            Math.max(
+                .28,
+                1.05-level*.055
+            )
+            *
+            (.7+Math.random()*.6);
+    }
+
+    /* Pièces */
+
+    coinTimer -= dt;
+
+    if(coinTimer<=0){
+
+        spawnCoin();
+
+        coinTimer =
+            .45+
+            Math.random()*.7;
+    }
+
+    /* Ennemis */
+
+    enemies.forEach(e=>{
+
+        e.y +=
+            (speed+e.speed)
+            *
+            dt*55;
+
+        if(collision(player,e)){
+
+            gameOver();
+        }
+    });
+
+    enemies =
+        enemies.filter(e=>
+            e.y<H+120
+        );
+
+    /* Pièces */
+
+    coins.forEach(c=>{
+
+        c.y +=
+            speed*
+            dt*
+            55;
+
+        c.rot += dt*5;
+
+        c.pulse += dt*8;
+
+    });
+
+    coins =
+        coins.filter(c=>{
+
+            const distance =
+                Math.hypot(
+                    player.x-c.x,
+                    player.y-c.y
+                );
+
+            if(distance<48){
+
+                coinCount++;
+
+                score += 250;
+
+                /* Bonus temporaire */
+
+                speed += .35;
+
+                if(speed>18)
+                    speed=18;
+
+                createParticles(
+                    c.x,
+                    c.y,
+                    "#00bfff"
+                );
+
+                return false;
+            }
+
+            return c.y<H+80;
+        });
+
+    /* Particules */
+
+    particles.forEach(p=>{
+
+        p.x += p.vx;
+        p.y += p.vy;
+
+        p.life -= dt*2;
+    });
+
+    particles =
+        particles.filter(
+            p=>p.life>0
+        );
+
+    /* Score */
+
+    score += speed*dt*3;
+
+    level =
+        1+
+        Math.floor(score/1500);
+
+    document.getElementById("score")
+        .textContent =
+        "SCORE : "+Math.floor(score);
+
+    document.getElementById("coins")
+        .textContent =
+        "💙 "+coinCount;
+
+    document.getElementById("speed")
+        .textContent =
+        Math.floor(speed*12)+" KM/H";
+
+    document.getElementById("level")
+        .textContent =
+        "NIVEAU : "+level;
+}
+
+function draw(){
+
+    ctx.fillStyle="#050713";
+    ctx.fillRect(0,0,W,H);
+
+    /* Ciel */
+
+    const gradient =
+        ctx.createLinearGradient(
+            0,0,0,H
+        );
+
+    gradient.addColorStop(
+        0,
+        "#080d24"
+    );
+
+    gradient.addColorStop(
+        1,
+        "#02030a"
+    );
+
+    ctx.fillStyle=gradient;
+    ctx.fillRect(0,0,W,H);
+
+    road();
+
+    /* Étoiles */
+
+    for(let i=0;i<30;i++){
+
+        const x=(i*97)%W;
+
+        const y=
+            (i*157+
+            roadOffset*.35)%H;
+
+        ctx.fillStyle="#ffffff55";
+
+        ctx.fillRect(
+            x,y,2,2
+        );
+    }
+
+    /* Pièces bleues */
+
+    coins.forEach(drawCoin);
+
+    /* Ennemis */
+
+    enemies.forEach(e=>{
+
+        drawCar(
+            e.x,
+            e.y,
+            e.w,
+            e.h,
+            e.color
+        );
+    });
+
+    /* Joueur */
+
+    drawCar(
+        player.x,
+        player.y,
+        player.w,
+        player.h,
+        player.color
+    );
+
+    /* Particules */
+
+    particles.forEach(p=>{
+
+        ctx.globalAlpha=p.life;
+
+        ctx.fillStyle=p.color;
+
+        ctx.shadowColor=p.color;
+        ctx.shadowBlur=10;
+
+        ctx.fillRect(
+            p.x,
+            p.y,
+            5,
+            5
+        );
+
+        ctx.shadowBlur=0;
+
+        ctx.globalAlpha=1;
+    });
+}
+
+function loop(t){
+
+    if(!running)
+        return;
+
+    const dt =
+        Math.min(
+            (t-last)/1000,
+            .035
+        );
+
+    last=t;
+
+    update(dt);
+
+    draw();
+
+    requestAnimationFrame(loop);
+}
+
+function gameOver(){
+
+    running=false;
+
+    document.getElementById("menu")
+        .style.display="flex";
+
+    document.querySelector("#menu h1")
+        .textContent="GAME OVER";
+
+    document.querySelector("#menu p")
+        .textContent=
+        "Score : "+
+        Math.floor(score)+
+        " • 💙 Pièces : "+
+        coinCount+
+        " • Niveau : "+
+        level;
+
+    document.getElementById("start")
+        .textContent="REJOUER";
+}
+
+document.getElementById("start")
+    .onclick=reset;
+
+/* =========================
+       CLAVIER
+========================= */
+
+addEventListener("keydown",e=>{
+
+    if(
+        e.key==="ArrowLeft" ||
+        e.key==="a"
+    )
+        left=true;
+
+    if(
+        e.key==="ArrowRight" ||
+        e.key==="d"
+    )
+        right=true;
+
+    if(
+        e.key===" " ||
+        e.key==="ArrowUp"
+    )
+        boosting=true;
+});
+
+addEventListener("keyup",e=>{
+
+    if(
+        e.key==="ArrowLeft" ||
+        e.key==="a"
+    )
+        left=false;
+
+    if(
+        e.key==="ArrowRight" ||
+        e.key==="d"
+    )
+        right=false;
+
+    if(
+        e.key===" " ||
+        e.key==="ArrowUp"
+    )
+        boosting=false;
+});
+
+/* =========================
+       COMMANDES MOBILE
+========================= */
+
+function hold(element,down,up){
+
+    element.addEventListener(
+        "pointerdown",
+        e=>{
+            e.preventDefault();
+            down();
+        }
+    );
+
+    element.addEventListener(
+        "pointerup",
+        e=>{
+            e.preventDefault();
+            up();
+        }
+    );
+
+    element.addEventListener(
+        "pointercancel",
+        up
+    );
+
+    element.addEventListener(
+        "pointerleave",
+        up
+    );
+}
+
+hold(
+    document.getElementById("left"),
+    ()=>left=true,
+    ()=>left=false
+);
+
+hold(
+    document.getElementById("right"),
+    ()=>right=true,
+    ()=>right=false
+);
+
+hold(
+    document.getElementById("boost"),
+    ()=>boosting=true,
+    ()=>boosting=false
+);
+
+</script>
+
+</body>
+</html>z
